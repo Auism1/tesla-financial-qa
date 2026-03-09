@@ -1,6 +1,6 @@
 """
-Indexer: builds ChromaDB vector store + BM25 index from processed chunks.
-Supports incremental rebuild and persistence.
+索引器：从处理后的块构建 ChromaDB 向量存储 + BM25 索引。
+支持增量重建和持久化。
 """
 import json
 import pickle
@@ -21,7 +21,7 @@ COLLECTION_NAME = "tesla_reports"
 
 
 class DashScopeEmbeddingFunction(EmbeddingFunction):
-    """Custom ChromaDB embedding function compatible with DashScope & OpenAI."""
+    """与 DashScope 和 OpenAI 兼容的自定义 ChromaDB 嵌入函数。"""
 
     def __init__(self, api_key: str, model: str, base_url: str | None = None):
         self.model = model
@@ -31,7 +31,7 @@ class DashScopeEmbeddingFunction(EmbeddingFunction):
         self.client = OpenAI(**kwargs)
 
     def __call__(self, input: Documents) -> Embeddings:
-        """Embed in sub-batches of 10 to satisfy DashScope's limit, with retry."""
+        """以 10 个为一批进行嵌入以满足 DashScope 的限制，带重试。"""
         import time
         texts = list(input)
         results = []
@@ -47,7 +47,7 @@ class DashScopeEmbeddingFunction(EmbeddingFunction):
                     if attempt == 4:
                         raise
                     wait = 2 ** attempt
-                    print(f"\n  [retry {attempt+1}/4] {e} — waiting {wait}s...")
+                    print(f"\n  [重试 {attempt+1}/4] {e} — 等待 {wait}秒...")
                     time.sleep(wait)
         return results
 
@@ -57,7 +57,7 @@ def get_embedding_function(
     model: str | None = None,
     base_url: str | None = None,
 ) -> DashScopeEmbeddingFunction:
-    """Return ChromaDB-compatible embedding function (DashScope or OpenAI)."""
+    """返回 ChromaDB 兼容的嵌入函数（DashScope 或 OpenAI）。"""
     import os
     model = model or os.environ.get("EMBEDDING_MODEL", "text-embedding-v3")
     base_url = base_url or os.environ.get("OPENAI_BASE_URL")
@@ -66,26 +66,26 @@ def get_embedding_function(
 
 def build_index(chunks: list[dict[str, Any]], api_key: str, embed_batch: int = 10, insert_batch: int = 100):
     """
-    Build ChromaDB collection and BM25 index from chunks list.
-    Pre-computes embeddings in small batches (DashScope max=10),
-    then inserts with explicit embeddings to skip ChromaDB's internal call.
+    从块列表构建 ChromaDB 集合和 BM25 索引。
+    以小批量预计算嵌入（DashScope 最大=10），
+    然后使用显式嵌入插入以跳过 ChromaDB 的内部调用。
     """
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
     BM25_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    # Save chunks for retrieval metadata
+    # 保存块以用于检索元数据
     with open(CHUNKS_PATH, "w", encoding="utf-8") as f:
         json.dump(chunks, f, ensure_ascii=False, indent=2)
-    print(f"Saved {len(chunks)} chunks to {CHUNKS_PATH}")
+    print(f"已保存 {len(chunks)} 个块到 {CHUNKS_PATH}")
 
-    # Build BM25
+    # 构建 BM25
     tokenized = [build_chunk_document(c).lower().split() for c in chunks]
     bm25 = BM25Okapi(tokenized)
     with open(BM25_PATH, "wb") as f:
         pickle.dump(bm25, f)
-    print(f"Saved BM25 index to {BM25_PATH}")
+    print(f"已保存 BM25 索引到 {BM25_PATH}")
 
-    # Pre-compute all embeddings in small batches
+    # 以小批量预计算所有嵌入
     ef = get_embedding_function(api_key)
     documents = [build_chunk_document(c) for c in chunks]
     ids = [c["chunk_id"] for c in chunks]
@@ -102,15 +102,15 @@ def build_index(chunks: list[dict[str, Any]], api_key: str, embed_batch: int = 1
             "page": c.get("page", 0),
         })
 
-    print(f"Computing embeddings for {len(documents)} documents (batch={embed_batch})...")
+    print(f"为 {len(documents)} 个文档计算嵌入（批次={embed_batch}）...")
     all_embeddings: list[list[float]] = []
     for i in range(0, len(documents), embed_batch):
         batch = documents[i:i + embed_batch]
         embs = ef(batch)
         all_embeddings.extend(embs)
-        print(f"  Embedded {min(i + embed_batch, len(documents))}/{len(documents)}")
+        print(f"  已嵌入 {min(i + embed_batch, len(documents))}/{len(documents)}")
 
-    # Build ChromaDB (no embedding function — we pass embeddings directly)
+    # 构建 ChromaDB（无嵌入函数 — 我们直接传递嵌入）
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
     try:
         client.delete_collection(COLLECTION_NAME)

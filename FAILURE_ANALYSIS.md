@@ -1,26 +1,26 @@
-# Failure Analysis — Tesla SEC Filings Q&A System (v2)
+# 失败分析 — 特斯拉 SEC 财报问答系统
 
-Deep-dive analysis of 5 test cases run against the actual system (JSON dataset, 6,153 chunks, after applying all three systemic fixes). Results recorded from `python run_tests.py`.
+针对实际系统（JSON 数据集，6,153 个块，应用所有三个系统性修复后）运行的 5 个测试案例的深度分析。结果记录自 `python run_tests.py`。
 
 ---
 
-## Test Results Summary
+## 测试结果摘要
 
-| Case | Question | Overall Result | Root Cause Category |
+| 案例 | 问题 | 总体结果 | 根本原因类别 |
 |------|----------|---------------|-------------------|
-| Q1 | China market risks 2021 vs 2023 10-K | **Failure** | Wrong section retrieved — 10-K RISK FACTORS chunks not surfacing |
-| Q2 | Total R&D expense 2022 vs FY2021 | **Success** | — |
-| Q3 | Lowest automotive gross margin + MD&A | **Partial** | Section label mismatch (automotive GM table labeled as SERVICES AND OTHER SEGMENT) |
-| Q4 | FCF quarter-by-quarter 2021–2023 | **Partial (Improved)** | YTD-only CF in 10-Q; FCF derivation instruction now added to LLM prompt |
-| Q5 | Supply chain risk evolution Q1-2021→Q3-2023 | **Partial (Improved)** | EXHIBITS blocklist fix works; 2022–2023 RISK FACTORS still sparse in context |
+| Q1 | 中国市场风险 2021 vs 2023 10-K | **失败** | 检索到错误章节 — 10-K RISK FACTORS 块未浮现 |
+| Q2 | 2022 年总研发费用 vs FY2021 | **成功** | — |
+| Q3 | 最低汽车毛利率 + MD&A | **部分成功** | 章节标签不匹配（汽车 GM 表格标记为 SERVICES AND OTHER SEGMENT） |
+| Q4 | 2021-2023 年每季度 FCF | **部分成功（改进）** | 10-Q 中仅有 YTD 现金流；FCF 推导指令现已添加到 LLM 提示 |
+| Q5 | 供应链风险演变 Q1-2021→Q3-2023 | **部分成功（改进）** | EXHIBITS 黑名单修复有效；2022-2023 RISK FACTORS 在上下文中仍稀疏 |
 
 ---
 
-## Case 1: China Market Risk Comparison (Q1) — FAILURE
+## 案例 1：中国市场风险比较（Q1）— 失败
 
-**Question**: *Compare how 2021 10-K and 2023 10-K describe China market risks. What changed?*
+**问题**：*比较 2021 年 10-K 和 2023 年 10-K 如何描述中国市场风险。有什么变化？*
 
-**Observed behavior**: Query analysis correctly set `doc_type="annual_report"`, `years=["2021","2023"]`. The section-targeted retrieval pass for risk-factor queries (matching "market risk" keyword) fired but still failed to surface RISK FACTORS content. Top sources retrieved:
+**观察到的行为**：查询分析正确设置了 `doc_type="annual_report"`，`years=["2021","2023"]`。针对风险因素查询的章节定向检索通道（匹配"market risk"关键词）触发但仍未能浮现 RISK FACTORS 内容。检索到的顶部来源：
 ```
 ('FY2021', 'FINANCIAL STATEMENTS', 'table')
 ('FY2023', 'PART III', 'text')
@@ -28,90 +28,90 @@ Deep-dive analysis of 5 test cases run against the actual system (JSON dataset, 
 ('FY2023', 'FINANCIAL STATEMENTS', 'text')
 ('FY2023', 'LEGAL PROCEEDINGS', 'text')
 ```
-No chunks from RISK FACTORS section appeared. The LLM correctly reported missing context and could not compare the two years.
+没有来自 RISK FACTORS 章节的块出现。LLM 正确报告了缺失的上下文，无法比较两年。
 
-**What changed vs previous run**: The EXHIBITS blocklist fix removed certification/exhibit chunks from results — sources no longer include EXHIBITS or OTHER INFORMATION. However, FINANCIAL STATEMENTS and PART III still dominate. The section-targeted retrieval pass for RISK FACTORS ran (triggered by "market risk" keyword) but returned no results, meaning either the 10-K RISK FACTORS section chunks have a different section label in the index, or the BM25/vector match within that section didn't rank highly for "China market risk."
+**与之前运行相比的变化**：EXHIBITS 黑名单修复从结果中删除了认证/附件块 — 来源不再包括 EXHIBITS 或 OTHER INFORMATION。然而，FINANCIAL STATEMENTS 和 PART III 仍占主导地位。RISK FACTORS 的章节定向检索通道运行了（由"market risk"关键词触发）但返回了空结果，这意味着要么 10-K RISK FACTORS 章节块在索引中有不同的章节标签，要么该章节内的 BM25/向量匹配对"China market risk"的排名不高。
 
-**Root cause tracing**:
-- BM25 scores "China" most highly against financial statement footnotes (e.g., "Tesla (Shanghai) Co., Ltd." appears in asset tables with high term frequency in a structured list, boosting TF).
-- Vector search maps "China market risks" closest to MARKET RISK DISCLOSURES section (interest rate / FX risk language), not to RISK FACTORS narrative.
-- The 10-K RISK FACTORS section chunks discussing China are likely indexed under a different section label due to complex 10-K page structure, so the section-targeted retrieval pass finds an empty result set.
+**根本原因追踪**：
+- BM25 对"China"的评分最高是针对财务报表脚注（例如，"Tesla (Shanghai) Co., Ltd."出现在资产表中，在结构化列表中具有高词频，提升了 TF）。
+- 向量搜索将"China market risks"映射到最接近 MARKET RISK DISCLOSURES 章节（利率/外汇风险语言），而不是 RISK FACTORS 叙述。
+- 讨论中国的 10-K RISK FACTORS 章节块可能由于复杂的 10-K 页面结构而在不同的章节标签下索引，因此章节定向检索通道找到了空结果集。
 
-**Root cause**: **Section detection gap in 10-K parsing** — Some RISK FACTORS pages in the 10-K annual reports are mis-labeled (e.g., assigned to "FINANCIAL STATEMENTS" or "OVERVIEW") due to preceding title blocks. Additionally, section-blind RRF cannot distinguish RISK FACTORS narrative from financial table chunks containing the word "China."
+**根本原因**：**10-K 解析中的章节检测缺口** — 10-K 年报中的某些 RISK FACTORS 页面被错误标记（例如，分配给"FINANCIAL STATEMENTS"或"OVERVIEW"），这是由于前面的标题块。此外，章节盲 RRF 无法区分 RISK FACTORS 叙述和包含"China"一词的财务表格块。
 
-**Concrete improvements**:
-1. **Inspect 10-K RISK FACTORS chunks**: Query `chunks.json` to check how many 10-K chunks carry `section="RISK FACTORS"` — if zero, the 10-K RISK FACTORS section is being mis-labeled at parse time.
-2. **Strengthen sub-query re-formulation**: For "compare risk disclosures" queries, auto-generate a sub-query like `"Risk Factors Item 1A China 2021 annual report"` with explicit Item 1A language to boost BM25 term matching against section-prefixed embeddings `[FY2021 | RISK FACTORS]`.
-3. **Expand `_ITEM_MAP`** in `json_parser.py`: Verify 10-K Item 1A detection is firing correctly; add additional aliases for "Risk Factors" that appear in 10-K table-of-contents title blocks.
-
----
-
-## Case 2: R&D Expense Annual Comparison (Q2) — SUCCESS
-
-**Question**: *What was the total R&D expense across all four quarters of 2022? Compare to FY2021 from the 2021 annual report.*
-
-**Observed behavior**: Query analysis set `doc_type="annual_report"`, `years=["2022","2021"]`, `quarters=[]`. Successfully retrieved and cited:
-- FY2022 R&D: **$3,075 million**
-- FY2021 R&D: **$2,593 million**
-- YoY increase: **+$482M (+19%)**
-
-The LLM correctly explained that "all four quarters of 2022" = FY2022 10-K figure, as there is no Q4 standalone 10-Q. The comparative income statement table with columns for 2022, 2021, 2020 was found as Source 9.
-
-**Why it worked**: `doc_type="annual_report"` filter correctly restricted retrieval. R&D expense appears in a standardized income statement table with high keyword density (BM25 advantage). "Research and development" embeds semantically close to "R&D expense."
-
-**No failure to analyze.**
+**具体改进**：
+1. **检查 10-K RISK FACTORS 块**：查询 `chunks.json` 以检查有多少 10-K 块带有 `section="RISK FACTORS"` — 如果为零，则 10-K RISK FACTORS 章节在解析时被错误标记。
+2. **加强子查询重新表述**：对于"比较风险披露"查询，自动生成子查询，如 `"Risk Factors Item 1A China 2021 annual report"`，使用明确的 Item 1A 语言来提升 BM25 术语匹配，针对章节前缀嵌入 `[FY2021 | RISK FACTORS]`。
+3. **扩展 `_ITEM_MAP`**：在 `json_parser.py` 中验证 10-K Item 1A 检测是否正确触发；为 10-K 目录标题块中出现的"Risk Factors"添加额外别名。
 
 ---
 
-## Case 3: Lowest Automotive Gross Margin + MD&A (Q3) — PARTIAL
+## 案例 2：研发费用年度比较（Q2）— 成功
 
-**Question**: *Which quarter from 2021 to 2024 had the lowest automotive gross margin? What does the MD&A say about that quarter?*
+**问题**：*2022 年所有四个季度的研发费用总额是多少？与 2021 年年报中的 FY2021 比较。*
 
-**Observed behavior**: Query analysis returned `doc_type="quarterly_report"` (LLM decision), `years=[2021–2024]`, `quarters=["Q1","Q2","Q3"]`. Fix 3 (doc_type filter) correctly suppresses `quarterly_report` from being propagated to `hybrid_search`. All 8 top sources were from `SERVICES AND OTHER SEGMENT` section. Found Q1-2024 = 18.5% as the lowest reported margin.
+**观察到的行为**：查询分析设置了 `doc_type="annual_report"`，`years=["2022","2021"]`，`quarters=[]`。成功检索并引用：
+- FY2022 研发：**$3,075 百万**
+- FY2021 研发：**$2,593 百万**
+- 同比增长：**+$482M (+19%)**
 
-**Failure symptoms**:
-1. **Section label mismatch**: Automotive gross margin tables are parsed under section `SERVICES AND OTHER SEGMENT` (because the preceding title block on the page said "Automotive & Services and Other Segment") rather than `AUTOMOTIVE SEGMENT`. The table content is correct but section metadata is wrong.
-2. **Q4 data still missing**: Even with the doc_type filter removed, 10-K automotive gross margin tables are also indexed under the wrong section label, so they don't surface reliably. Q4-2022, Q4-2023 remain unexamined.
-3. **Section-targeted retrieval not triggered**: The `_MDA_KEYWORDS` regex matched but the subsequent MD&A section-targeted pass retrieved MD&A text chunks that don't contain the automotive gross margin table.
+LLM 正确解释了"2022 年所有四个季度"= FY2022 10-K 数字，因为没有单独的 Q4 10-Q。找到了包含 2022、2021、2020 列的比较损益表表格作为来源 9。
 
-**Root cause**: **Section label assigned at page level** — When a 10-Q page header says "Automotive & Services and Other Segment" followed by tables for both sub-segments, the parser assigns `SERVICES AND OTHER SEGMENT` to all tables on that page. The automotive gross margin table gets the wrong section label.
+**为什么有效**：`doc_type="annual_report"` 过滤器正确限制了检索。研发费用出现在标准化的损益表表格中，具有高关键词密度（BM25 优势）。"Research and development"在语义上嵌入接近"R&D expense"。
 
-**Concrete improvements**:
-1. **Fix SECTION_MAP** in `json_parser.py`: Add mapping `"AUTOMOTIVESERVICESANDOTHERSEGMENT"` → `"AUTOMOTIVE SEGMENT"` (currently maps to `SERVICES AND OTHER SEGMENT`).
-2. **Multi-pass table retrieval**: For gross margin queries, run a targeted pass with query `"automotive gross margin table percent"` restricted to `chunk_type="table"` without section constraint.
-3. **Direct table search as fallback**: If fewer than 3 table chunks appear in top results for a metric-lookup query, run a secondary retrieval pass with `chunk_type="table"` filter to guarantee table coverage.
+**无失败需要分析。**
 
 ---
 
-## Case 4: Free Cash Flow Quarter-by-Quarter (Q4_FCF) — PARTIAL (Improved)
+## 案例 3：最低汽车毛利率 + MD&A（Q3）— 部分成功
 
-**Question**: *Describe Tesla's free cash flow fluctuation quarter by quarter from 2021 to 2023.*
+**问题**：*2021 年至 2024 年哪个季度的汽车毛利率最低？MD&A 对该季度有何评论？*
 
-**Observed behavior** (improved vs v1): Sources now include LIQUIDITY AND CAPITAL RESOURCES and MD&A sections. The LLM correctly:
-1. Explained that 10-Q filings only report YTD cumulative operating cash flows, not standalone quarterly FCF.
-2. Demonstrated the subtraction methodology (Q2 FCF = 6-month YTD − Q1 YTD) using the FCF derivation instruction added to the LLM prompt.
-3. Computed partial FCF figures for available periods (Q1-2021, Q2-2021, Q1-2023).
+**观察到的行为**：查询分析返回 `doc_type="quarterly_report"`（LLM 决策），`years=[2021–2024]`，`quarters=["Q1","Q2","Q3"]`。修复 3（doc_type 过滤器）正确抑制了 `quarterly_report` 传播到 `hybrid_search`。所有 8 个顶部来源都来自 `SERVICES AND OTHER SEGMENT` 章节。找到 Q1-2024 = 18.5% 作为报告的最低利润率。
 
-**Fix 5 impact**: The FCF derivation instruction explicitly teaches the model to subtract prior YTD from current YTD. The model now shows its arithmetic and correctly flags when intermediate YTD data is missing from context, rather than presenting YTD cumulative figures as if they were quarterly.
+**失败症状**：
+1. **章节标签不匹配**：汽车毛利率表格在 `SERVICES AND OTHER SEGMENT` 章节下解析（因为页面上的前面标题块说"Automotive & Services and Other Segment"），而不是 `AUTOMOTIVE SEGMENT`。表格内容正确，但章节元数据错误。
+2. **Q4 数据仍缺失**：即使删除了 doc_type 过滤器，10-K 汽车毛利率表格也在错误的章节标签下索引，因此它们不能可靠地浮现。Q4-2022、Q4-2023 仍未检查。
+3. **章节定向检索未触发**：`_MDA_KEYWORDS` 正则表达式匹配，但随后的 MD&A 章节定向通道检索的 MD&A 文本块不包含汽车毛利率表格。
 
-**Remaining failure symptoms**:
-1. **Incomplete YTD coverage**: Not all 9 quarterly YTD periods (Q1–Q3 for 2021, 2022, 2023) were retrieved in a single pass. Missing: Q2-2022 YTD, Q3-2022 YTD, Q2-2023 YTD, Q3-2023 YTD.
-2. **Number formatting artifacts remain**: Some parsed text still contains spacing anomalies in numbers. The normalization fixes address LaTeX-style artifacts but not all MinerU span-merge separators.
+**根本原因**：**在页面级别分配的章节标签** — 当 10-Q 页面标题说"Automotive & Services and Other Segment"后跟两个子细分的表格时，解析器将 `SERVICES AND OTHER SEGMENT` 分配给该页面上的所有表格。汽车毛利率表格获得了错误的章节标签。
 
-**Root cause**: (1) **SEC 10-Q inherent structure** — Quarterly FCF requires YTD subtraction across two retrieved chunks, requiring both to be present in top-12 context simultaneously. (2) **Retrieval breadth vs. depth trade-off** — Retrieving 9 sub-queries (one per quarter-period) is expensive and dilutes top-k slots.
-
-**Concrete improvements**:
-1. **Structured FCF sub-query generation**: When query mentions "free cash flow" + multiple years, auto-generate YTD pair sub-queries — for each quarter, retrieve both current and prior YTD to guarantee both endpoints are present.
-2. **Increase context window**: Raise `max_chunks` from 12 to 16–20 for FCF queries to accommodate multiple YTD periods.
-3. **Post-retrieval arithmetic step**: Dedicated FCF computation step that extracts YTD numbers from retrieved chunks and computes Q-over-Q differences before passing to the LLM.
+**具体改进**：
+1. **修复 SECTION_MAP**：在 `json_parser.py` 中添加映射 `"AUTOMOTIVESERVICESANDOTHERSEGMENT"` → `"AUTOMOTIVE SEGMENT"`（当前映射到 `SERVICES AND OTHER SEGMENT`）。
+2. **多通道表格检索**：对于毛利率查询，运行带有查询 `"automotive gross margin table percent"` 的定向通道，限制为 `chunk_type="table"`，无章节约束。
+3. **直接表格搜索作为回退**：如果顶部结果中出现少于 3 个表格块用于指标查找查询，则运行带有 `chunk_type="table"` 过滤器的辅助检索通道以保证表格覆盖。
 
 ---
 
-## Case 5: Supply Chain Risk Evolution Q1-2021 to Q3-2023 (Q5) — PARTIAL (Significantly Improved)
+## 案例 4：每季度自由现金流（Q4_FCF）— 部分成功（改进）
 
-**Question**: *How did Tesla's risk factor disclosures about supply chain evolve from 2021 Q1 to 2023 Q3? Cite specific quarters.*
+**问题**：*描述特斯拉 2021 年至 2023 年每季度自由现金流的波动情况。*
 
-**Observed behavior** (significantly improved vs v1): Top sources now include:
+**观察到的行为**（与 v1 相比改进）：来源现在包括 LIQUIDITY AND CAPITAL RESOURCES 和 MD&A 章节。LLM 正确地：
+1. 解释了 10-Q 财报仅报告 YTD 累计经营现金流，而不是独立的季度 FCF。
+2. 演示了减法方法（Q2 FCF = 6 个月 YTD − Q1 YTD），使用添加到 LLM 提示的 FCF 推导指令。
+3. 计算了可用期间的部分 FCF 数字（Q1-2021、Q2-2021、Q1-2023）。
+
+**修复 5 影响**：FCF 推导指令明确教导模型从当前 YTD 减去先前 YTD。模型现在显示其算术，并在上下文中缺少中间 YTD 数据时正确标记，而不是将 YTD 累计数字呈现为季度数字。
+
+**剩余失败症状**：
+1. **YTD 覆盖不完整**：并非所有 9 个季度 YTD 期间（2021、2022、2023 的 Q1-Q3）都在一次通道中检索到。缺失：Q2-2022 YTD、Q3-2022 YTD、Q2-2023 YTD、Q3-2023 YTD。
+2. **数字格式伪影仍然存在**：一些解析的文本仍包含数字中的间距异常。规范化修复解决了 LaTeX 样式的伪影，但不是所有 MinerU span-merge 分隔符。
+
+**根本原因**：(1) **SEC 10-Q 固有结构** — 季度 FCF 需要跨两个检索块的 YTD 减法，要求两者同时出现在前 12 个上下文中。(2) **检索广度 vs. 深度权衡** — 检索 9 个子查询（每个季度期间一个）成本高昂且稀释了 top-k 槽位。
+
+**具体改进**：
+1. **结构化 FCF 子查询生成**：当查询提到"自由现金流"+ 多年时，自动生成 YTD 对子查询 — 对于每个季度，检索当前和先前 YTD 以保证两个端点都存在。
+2. **增加上下文窗口**：对于 FCF 查询，将 `max_chunks` 从 12 提高到 16-20，以容纳多个 YTD 期间。
+3. **检索后算术步骤**：专用 FCF 计算步骤，从检索的块中提取 YTD 数字并在传递给 LLM 之前计算 Q-over-Q 差异。
+
+---
+
+## 案例 5：供应链风险演变 Q1-2021 至 Q3-2023（Q5）— 部分成功（显著改进）
+
+**问题**：*特斯拉关于供应链的风险因素披露从 2021 年 Q1 到 2023 年 Q3 如何演变？引用具体季度。*
+
+**观察到的行为**（与 v1 相比显著改进）：顶部来源现在包括：
 ```
 ('Q1-2021', 'RISK FACTORS', 'text')
 ('Q2-2021', 'RISK FACTORS', 'text')
@@ -121,62 +121,62 @@ The LLM correctly explained that "all four quarters of 2022" = FY2022 10-K figur
 ('Q1-2023', 'ENERGY SEGMENT', 'text')
 ```
 
-The LLM delivered a substantive, well-cited answer:
-- **Q1-2021**: Broad pandemic/event framing; semiconductor shortage first explicitly named as current active risk
-- **Q2-2021**: Port congestion, labor shortages added
-- **Q3-2021**: Geopolitical disruption framing deepened
-- **Q3-2022**: Russia-Ukraine war impact; battery material sourcing risks added
-- 2023: Limited coverage — retrieved ENERGY SEGMENT instead of RISK FACTORS for 2023 quarters
+LLM 提供了实质性的、引用良好的答案：
+- **Q1-2021**：广泛的疫情/事件框架；半导体短缺首次明确命名为当前活跃风险
+- **Q2-2021**：增加了港口拥堵、劳动力短缺
+- **Q3-2021**：地缘政治破坏框架加深
+- **Q3-2022**：俄乌战争影响；增加了电池材料采购风险
+- 2023：覆盖有限 — 检索到 ENERGY SEGMENT 而不是 2023 季度的 RISK FACTORS
 
-**Fix 1 impact**: EXHIBITS blocklist completely eliminated certification/exhibit pollution. RISK FACTORS sections for 2021 now dominate the top results — a major qualitative improvement from the previous run where all 6 top sources were from EXHIBITS or OTHER INFORMATION (returning zero useful content).
+**修复 1 影响**：EXHIBITS 黑名单完全消除了认证/附件污染。2021 年的 RISK FACTORS 章节现在主导顶部结果 — 与之前运行相比质量有重大改进，之前所有 6 个顶部来源都来自 EXHIBITS 或 OTHER INFORMATION（返回零有用内容）。
 
-**Remaining failure symptoms**:
-1. **2022–2023 RISK FACTORS absent**: Q2-2022, Q1-2022, Q1-2023 RISK FACTORS chunks not retrieved — MD&A or ENERGY SEGMENT chunks appear instead.
-2. **Section-targeted pass partially effective**: The `_RISK_KEYWORDS` regex matched the query and the RISK FACTORS section pass retrieved 2021 data correctly but not 2022–2023 periods, suggesting inconsistent section labeling across years.
+**剩余失败症状**：
+1. **2022-2023 RISK FACTORS 缺失**：Q2-2022、Q1-2022、Q1-2023 RISK FACTORS 块未检索到 — 出现 MD&A 或 ENERGY SEGMENT 块。
+2. **章节定向通道部分有效**：`_RISK_KEYWORDS` 正则表达式匹配了查询，RISK FACTORS 章节通道正确检索了 2021 年数据，但没有检索 2022-2023 期间，表明跨年份的章节标记不一致。
 
-**Root cause**: **Inconsistent RISK FACTORS section labeling across years** — 2021 quarterly reports have RISK FACTORS sections cleanly labeled (Item 1A detection works). 2022–2023 quarterly reports may have different structural layouts or title block formats causing the section detector to assign different labels to the risk factor text.
+**根本原因**：**跨年份的 RISK FACTORS 章节标记不一致** — 2021 年季度报告具有清晰标记的 RISK FACTORS 章节（Item 1A 检测有效）。2022-2023 年季度报告可能具有不同的结构布局或标题块格式，导致章节检测器为风险因素文本分配不同的标签。
 
-**Concrete improvements**:
-1. **Verify 2022–2023 RISK FACTORS chunks**: Check `data/chunks.json` for `year in ["2022","2023"]` and `section="RISK FACTORS"` to confirm they exist and are correctly labeled.
-2. **Expand keyword patterns**: Check if 2022–2023 10-Q files use different Item numbering or phrasing (e.g., "ITEM 1A." vs "Item 1A.") that isn't matched by current `_ITEM_MAP` patterns.
-3. **Fallback to broader retrieval**: When section-targeted pass returns < 3 results, fall back to unrestricted search with an explicit sub-query like `"supply chain risk Item 1A quarterly filing {year}"`.
-
----
-
-## Systemic Issues — Updated Status
-
-### Issue 1: Number Formatting Artifacts from MinerU Parsing
-
-**Status**: Partially fixed.
-
-**Fix applied**: Added `_normalize_financial_numbers()` in `json_parser.py` — handles `\$ X` LaTeX prefix, spaced decimals (`$12 30` → `$12.30`), space-separated thousands (`$1 237` → `$1,237`).
-
-**Remaining**: Artifacts where MinerU outputs numbers as separate span tokens without the dollar prefix (e.g., plain `1237` in a number column) require table-level normalization during HTML-to-markdown conversion.
-
-### Issue 2: EXHIBITS/OTHER INFORMATION Section Pollution
-
-**Status**: Fixed. ✓
-
-**Fix applied**: `SECTION_BLOCKLIST = {"EXHIBITS", "OTHER INFORMATION", "PART IV", "SECURITY OWNERSHIP", "CERTIFICATIONS"}` in `retriever.py`. BM25 skips blocklisted chunks during scoring; post-RRF filter removes any that survive vector search.
-
-**Result**: Q5 improved from 0/8 relevant sources to 3/8 RISK FACTORS sources. Q1 no longer returns EXHIBITS/certification chunks.
-
-### Issue 3: doc_type Auto-Filter Excluding Q4 Annual Data
-
-**Status**: Fixed. ✓
-
-**Fix applied**: In `qa_system.py`, only propagate `doc_type="annual_report"` from query analysis to `hybrid_search`. Never auto-restrict to `quarterly_report`.
-
-**Result**: Q3 (automotive gross margin) no longer auto-filters to quarterly_report, allowing 10-K annual data to potentially appear. The remaining issue (section mislabeling) is a separate parser problem.
+**具体改进**：
+1. **验证 2022-2023 RISK FACTORS 块**：检查 `data/chunks.json` 中 `year in ["2022","2023"]` 和 `section="RISK FACTORS"` 以确认它们存在并正确标记。
+2. **扩展关键词模式**：检查 2022-2023 10-Q 文件是否使用不同的 Item 编号或措辞（例如，"ITEM 1A." vs "Item 1A."），当前 `_ITEM_MAP` 模式未匹配。
+3. **回退到更广泛的检索**：当章节定向通道返回 < 3 个结果时，回退到无限制搜索，使用明确的子查询，如 `"supply chain risk Item 1A quarterly filing {year}"`。
 
 ---
 
-## Summary Table (v2 — Post-Fix)
+## 系统性问题 — 更新状态
 
-| Case | Symptom | Root Cause | Fix Applied | Remaining Issue |
+### 问题 1：MinerU 解析的数字格式伪影
+
+**状态**：部分修复。
+
+**应用的修复**：在 `json_parser.py` 中添加了 `_normalize_financial_numbers()` — 处理 `\$ X` LaTeX 前缀、间隔小数（`$12 30` → `$12.30`）、空格分隔的千位（`$1 237` → `$1,237`）。
+
+**剩余**：MinerU 将数字输出为单独的 span 令牌而没有美元前缀的伪影（例如，数字列中的纯 `1237`）需要在 HTML 到 markdown 转换期间进行表级规范化。
+
+### 问题 2：EXHIBITS/OTHER INFORMATION 章节污染
+
+**状态**：已修复。✓
+
+**应用的修复**：`retriever.py` 中的 `SECTION_BLOCKLIST = {"EXHIBITS", "OTHER INFORMATION", "PART IV", "SECURITY OWNERSHIP", "CERTIFICATIONS"}`。BM25 在评分期间跳过黑名单块；RRF 后过滤器删除任何通过向量搜索存活的块。
+
+**结果**：Q5 从 0/8 相关来源改进到 3/8 RISK FACTORS 来源。Q1 不再返回 EXHIBITS/认证块。
+
+### 问题 3：doc_type 自动过滤排除 Q4 年度数据
+
+**状态**：已修复。✓
+
+**应用的修复**：在 `qa_system.py` 中，仅从查询分析传播 `doc_type="annual_report"` 到 `hybrid_search`。从不自动限制为 `quarterly_report`。
+
+**结果**：Q3（汽车毛利率）不再自动过滤为 quarterly_report，允许 10-K 年度数据可能出现。剩余问题（章节错误标记）是一个单独的解析器问题。
+
+---
+
+## 摘要表（v2 — 修复后）
+
+| 案例 | 症状 | 根本原因 | 应用的修复 | 剩余问题 |
 |------|---------|-----------|-------------|-----------------|
-| Q1 | FINANCIAL STATEMENTS retrieved instead of RISK FACTORS | 10-K RISK FACTORS mislabeled; query-to-section embedding mismatch | Blocklist + section-targeted pass | Parser-level 10-K section labeling |
-| Q2 | — (Success) | — | — | None |
-| Q3 | Automotive GM table labeled as wrong section | Page-level section assignment; combined header mismapped | doc_type auto-filter removed | Parser SECTION_MAP fix needed |
-| Q4 | YTD-only CF; incomplete quarterly coverage | SEC 10-Q structure limitation | FCF derivation prompt; number normalization | Incomplete YTD retrieval coverage |
-| Q5 | EXHIBITS blocked 2022–2023 RISK FACTORS | EXHIBITS keyword pollution | Blocklist fix; section-targeted retrieval | 2022–2023 RISK FACTORS inconsistently labeled |
+| Q1 | 检索到 FINANCIAL STATEMENTS 而不是 RISK FACTORS | 10-K RISK FACTORS 错误标记；查询到章节嵌入不匹配 | 黑名单 + 章节定向通道 | 解析器级 10-K 章节标记 |
+| Q2 | —（成功） | — | — | 无 |
+| Q3 | 汽车 GM 表格标记为错误章节 | 页面级章节分配；组合标题映射错误 | doc_type 自动过滤移除 | 需要解析器 SECTION_MAP 修复 |
+| Q4 | 仅 YTD 现金流；季度覆盖不完整 | SEC 10-Q 结构限制 | FCF 推导提示；数字规范化 | YTD 检索覆盖不完整 |
+| Q5 | EXHIBITS 阻止了 2022-2023 RISK FACTORS | EXHIBITS 关键词污染 | 黑名单修复；章节定向检索 | 2022-2023 RISK FACTORS 标记不一致 |

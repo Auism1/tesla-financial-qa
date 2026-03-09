@@ -1,26 +1,26 @@
 """
-Semantic chunker for Tesla financial report chunks.
-Strategy:
-  1. Tables are kept as individual atomic chunks (never split).
-  2. Text chunks within a section are merged up to MAX_CHARS.
-  3. Long text chunks are split with sentence-aware overlap (OVERLAP_CHARS).
-  4. Each chunk retains full metadata: year, quarter, section, page, doc_type.
+特斯拉财报块的语义分块器。
+策略：
+  1. 表格保持为独立的原子块（从不拆分）。
+  2. 章节内的文本块合并至 MAX_CHARS。
+  3. 长文本块使用句子感知重叠（OVERLAP_CHARS）拆分。
+  4. 每个块保留完整元数据：年份、季度、章节、页码、文档类型。
 """
 import re
 from typing import Any
 
-MAX_CHARS = 1200       # soft max for text chunks
-OVERLAP_CHARS = 150    # overlap between consecutive text chunks
+MAX_CHARS = 1200       # 文本块的软最大值
+OVERLAP_CHARS = 150    # 连续文本块之间的重叠
 
 
 def split_sentences(text: str) -> list[str]:
-    """Rough sentence splitter."""
+    """粗略的句子拆分器。"""
     parts = re.split(r"(?<=[.!?])\s+", text)
     return [p.strip() for p in parts if p.strip()]
 
 
 def chunk_text_block(text: str, meta: dict, section: str, page: int, subsection: str = "") -> list[dict[str, Any]]:
-    """Split a long text block into overlapping chunks."""
+    """将长文本块拆分为重叠的块。"""
     if len(text) <= MAX_CHARS:
         return [{
             "text": text,
@@ -63,21 +63,21 @@ def chunk_text_block(text: str, meta: dict, section: str, page: int, subsection:
 
 def merge_and_rechunk(raw_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
-    1. Keep table chunks as-is.
-    2. Merge consecutive text chunks from the same document + section.
-    3. Re-split merged text if > MAX_CHARS.
-    4. Assign a unique chunk_id.
+    1. 保持表格块不变。
+    2. 合并来自同一文档 + 章节的连续文本块。
+    3. 如果合并后的文本 > MAX_CHARS，则重新拆分。
+    4. 分配唯一的 chunk_id。
     """
     result: list[dict[str, Any]] = []
     chunk_id = 0
 
-    # Group by (filename, section) for merging text
+    # 按 (filename, section) 分组以合并文本
     groups: list[list[dict]] = []
     current_group: list[dict] = []
 
     for chunk in raw_chunks:
         if chunk["chunk_type"] == "table":
-            # Flush current group
+            # 刷新当前组
             if current_group:
                 groups.append(current_group)
                 current_group = []
@@ -87,7 +87,7 @@ def merge_and_rechunk(raw_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 current_group.append(chunk)
             else:
                 prev = current_group[-1]
-                # Same doc + section + subsection → merge
+                # 相同文档 + 章节 + 子章节 → 合并
                 if (prev["filename"] == chunk["filename"] and
                         prev["section"] == chunk["section"] and
                         prev.get("subsection", "") == chunk.get("subsection", "")):
@@ -106,7 +106,7 @@ def merge_and_rechunk(raw_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
             chunk_id += 1
             continue
 
-        # Merge text
+        # 合并文本
         merged_text = " ".join(c["text"] for c in group).strip()
         base_meta = {k: v for k, v in group[0].items()
                      if k not in ("text", "chunk_type", "section", "subsection", "page")}
@@ -125,8 +125,8 @@ def merge_and_rechunk(raw_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def build_chunk_document(chunk: dict[str, Any]) -> str:
     """
-    Build the string that will be embedded.
-    Prefix with metadata for better retrieval of time-specific queries.
+    构建将被嵌入的字符串。
+    添加元数据前缀以更好地检索时间特定查询。
     """
     section_label = chunk["section"]
     if chunk.get("subsection"):
